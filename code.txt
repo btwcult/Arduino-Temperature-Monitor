@@ -1,0 +1,178 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+// Инициализация LCD дисплея с I2C адресом 0x27, размером 16x2 символов
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// Настройка датчика температуры DS18B20
+#define ONE_WIRE_BUS 2
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+
+// Определение пинов для кнопок
+const int buttonUpPin = 3;    // Кнопка увеличения температуры
+const int buttonDownPin = 4;  // Кнопка уменьшения температуры
+// Встроенный светодиод на пине 13 будет использоваться как индикатор нагрева
+
+// Переменные для хранения температур
+float setTemp = 22.0;    // Уставка температуры (начальное значение)
+float currentTemp = 0;   // Текущая температура с датчика
+
+// Переменные для обработки кнопок
+unsigned long lastUpPressTime = 0;    // Время последнего нажатия кнопки "+"
+unsigned long lastDownPressTime = 0;  // Время последнего нажатия кнопки "-"
+unsigned long lastRepeatTime = 0;     // Время последнего автоповтора
+bool upButtonPressed = false;         // Флаг состояния кнопки "+"
+bool downButtonPressed = false;       // Флаг состояния кнопки "-"
+bool upButtonWasPressed = false;      // Флаг предыдущего состояния кнопки "+"
+bool downButtonWasPressed = false;    // Флаг предыдущего состояния кнопки "-"
+
+// Настройки временных интервалов для обработки кнопок
+const unsigned long initialDelay = 200;   // Задержка перед началом автоповтора (мс)
+const unsigned long repeatDelay = 20;    // Стандартная задержка между изменениями
+const unsigned long fastRepeatDelay = 50; // Быстрая задержка (4 раза в секунду = 250мс)
+
+// Создание пользовательского символа для знака градуса
+byte degreeSymbol[8] = {
+  B01100,
+  B10010,
+  B10010,
+  B01100,
+  B00000,
+  B00000,
+  B00000,
+  B00000
+};
+
+void setup() {
+  // Инициализация LCD дисплея
+  lcd.init();
+  lcd.backlight();
+  
+  // Создание пользовательского символа градуса (код 0)
+  lcd.createChar(0, degreeSymbol);
+  
+  // Настройка пинов кнопок с внутренними подтягивающими резисторами
+  pinMode(buttonUpPin, INPUT_PULLUP);
+  pinMode(buttonDownPin, INPUT_PULLUP);
+  pinMode(13, OUTPUT); // Настройка встроенного светодиода как выхода
+  
+  // Инициализация датчика температуры
+  sensors.begin();
+  
+  // Начальная настройка дисплея - вывод статических надписей
+  lcd.setCursor(0, 0);
+  lcd.print("Set:");  // Надпись для уставки
+  lcd.setCursor(0, 1);
+  lcd.print("Cur:");  // Надпись для текущей температуры
+}
+
+void loop() {
+  // 1. ЧТЕНИЕ ТЕМПЕРАТУРЫ С ДАТЧИКА
+  sensors.requestTemperatures();           // Запрос измерения температуры
+  currentTemp = sensors.getTempCByIndex(0); // Чтение температуры в градусах Цельсия
+  
+  // 2. ОБРАБОТКА НАЖАТИЙ КНОПОК
+  handleButtons();
+  
+  // 3. УПРАВЛЕНИЕ СВЕТОДИОДОМ-ИНДИКАТОРОМ
+  // Светодиод горит, когда текущая температура превышает уставку
+  if (currentTemp > setTemp) {
+    digitalWrite(13, HIGH); // Включить светодиод (нагрев)
+  } else {
+    digitalWrite(13, LOW);  // Выключить светодиод
+  }
+  
+  // 4. Вывод на дисплей
+  updateDisplay();
+  
+  // Короткая задержка для стабильности работы
+  delay(50);
+}
+
+void handleButtons() {
+  // ЧТЕНИЕ ТЕКУЩЕГО СОСТОЯНИЯ КНОПОК
+  bool upButtonNow = (digitalRead(buttonUpPin) == LOW);
+  bool downButtonNow = (digitalRead(buttonDownPin) == LOW);
+  
+  // ОБРАБОТКА КНОПКИ "+" (УВЕЛИЧЕНИЕ ТЕМПЕРАТУРЫ)
+  if (upButtonNow) {
+    if (!upButtonWasPressed) {
+      // Кнопка только что нажата - немедленное изменение
+      setTemp += 0.5;
+      upButtonPressed = true;
+      upButtonWasPressed = true;
+      lastUpPressTime = millis();
+      lastRepeatTime = millis();
+    } else {
+      // Кнопка удерживается - проверяем время для автоповтора
+      unsigned long currentTime = millis();
+      if (currentTime - lastUpPressTime > initialDelay) {
+        // Автоповтор с выбранной скоростью
+        if (currentTime - lastRepeatTime > fastRepeatDelay) {
+          setTemp += 0.5;
+          lastRepeatTime = currentTime;
+        }
+      }
+    }
+  } else {
+    // Кнопка отпущена
+    upButtonPressed = false;
+    upButtonWasPressed = false;
+  }
+  
+  // ОБРАБОТКА КНОПКИ "-" (УМЕНЬШЕНИЕ ТЕМПЕРАТУРЫ)
+  if (downButtonNow) {
+    if (!downButtonWasPressed) {
+      // Кнопка только что нажата - немедленное изменение
+      setTemp -= 0.5;
+      downButtonPressed = true;
+      downButtonWasPressed = true;
+      lastDownPressTime = millis();
+      lastRepeatTime = millis();
+    } else {
+      // Кнопка удерживается - проверяем время для автоповтора
+      unsigned long currentTime = millis();
+      if (currentTime - lastDownPressTime > initialDelay) {
+        // Автоповтор с выбранной скоростью
+        if (currentTime - lastRepeatTime > fastRepeatDelay) {
+          setTemp -= 0.5;
+          lastRepeatTime = currentTime;
+        }
+      }
+    }
+  } else {
+    // Кнопка отпущена
+    downButtonPressed = false;
+    downButtonWasPressed = false;
+  }
+  
+  // ОГРАНИЧЕНИЕ ДИАПАЗОНА УСТАВКИ
+  // Защита от установки слишком низкой или слишком высокой температуры
+  if (setTemp < 10.0) setTemp = 10.0;
+  if (setTemp > 35.0) setTemp = 35.0;
+}
+
+void updateDisplay() {
+  // ОБНОВЛЕНИЕ ЗНАЧЕНИЯ УСТАВКИ НА ДИСПЛЕЕ
+  lcd.setCursor(4, 0);        // Устанавливаем курсор на позицию для уставки (после "Set:")
+  lcd.print(setTemp, 1);      // Выводим уставку с одним знаком после запятой
+  
+  // Вывод символа градуса и буквы C для уставки
+  lcd.setCursor(9, 0);        // Позиция после значения температуры
+  lcd.write(0);               // Вывод пользовательского символа градуса (код 0)
+  lcd.print("C");             // Вывод буквы C (Цельсия)
+  lcd.print("  ");            // Дополнительные пробелы для очистки старых символов
+  
+  // ОБНОВЛЕНИЕ ТЕКУЩЕЙ ТЕМПЕРАТУРЫ НА ДИСПЛЕЕ
+  lcd.setCursor(4, 1);        // Устанавливаем курсор на позицию для текущей температуры (после "Cur:")
+  lcd.print(currentTemp, 1);  // Выводим текущую температуру с одним знаком после запятой
+  
+  // Вывод символа градуса и буквы C для текущей температуры
+  lcd.setCursor(9, 1);        // Позиция после значения температуры
+  lcd.write(0);               // Вывод пользовательского символа градуса (код 0)
+  lcd.print("C");             // Вывод буквы C (Цельсия)
+  lcd.print("  ");            // Дополнительные пробелы для очистки старых символов
+}
